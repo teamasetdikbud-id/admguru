@@ -112,7 +112,7 @@
 
    <script>
        // --- KONFIGURASI API (WAJIB DIISI) ---
-       const GAS_URL = "https://script.google.com/macros/s/AKfycby9uUXTurHIv9G5G8upUJFWzuNM0LPqbDaGw_S91yy3aLTLEQ5wqj4w5fNk-aPoSrTjBA/exec";
+       const GAS_URL = "https://script.google.com/macros/s/AKfycbxq98lZCBAYKm8Ey-eE2LR5KnKbpfKCqJ7fSycUHz8Q1AcsT0qzrGG2MVF_-DMJ9E5ReQ/exec";
 
        // --- DATA STATE ---
        let db = { Kelas: [], Siswa: [], Nilai: [], Jurnal: [], Absen: [], Bimbingan: [], Settings: [], Jadwal: [], Users: [] };
@@ -162,18 +162,14 @@
 
        // --- API CALL WRAPPER ---
        async function callGAS(action, payload = null) {
-           startLoading();
            try {
                const response = await fetch(GAS_URL, {
                    method: 'POST',
                    headers: { 'Content-Type': 'text/plain;charset=utf-8' },
                    body: JSON.stringify({ action: action, payload: payload })
                });
-               const result = await response.json();
-               endLoading();
-               return result;
+               return await response.json();
            } catch (error) {
-               endLoading();
                console.error("Fetch Error:", error);
                Swal.fire('Error', 'Gagal menghubungi server database', 'error');
                return null;
@@ -207,6 +203,7 @@
            }
        }
 
+       // SPA OPTIMIZATION: Load data once on login
        async function checkLogin() {
            const auth = localStorage.getItem('guru_v53_ultra');
            if (auth) {
@@ -214,22 +211,32 @@
                document.getElementById('login-view').classList.add('hidden');
                document.getElementById('main-view').classList.remove('hidden');
                
-               // Update Sidebar Status Info
                document.getElementById('sidebar-user-name').innerText = currentUser.nama;
                let roleTxt = currentUser.role;
                if(currentUser.role === 'Guru Kelas') roleTxt += ` (${currentUser.akses_kelas})`;
                if(currentUser.role === 'Guru Bidang Studi') roleTxt += ` (${currentUser.akses_mapel})`;
                document.getElementById('sidebar-user-role').innerText = roleTxt;
 
+               startLoading();
+               const data = await callGAS('getAllData');
+               if (data) {
+                   db = data;
+                   applyBranding();
+               }
+               endLoading();
+
                switchTab('dashboard');
            } else {
                document.getElementById('login-view').classList.remove('hidden');
                document.getElementById('main-view').classList.add('hidden');
+               
+               startLoading();
                const data = await callGAS('getData', 'Settings');
                if(data) {
                    db.Settings = data;
                    applyBranding();
                }
+               endLoading();
            }
        }
 
@@ -237,7 +244,10 @@
            e.preventDefault();
            const payload = { username: document.getElementById('username').value, password: document.getElementById('password').value };
            
+           startLoading();
            const res = await callGAS('loginUser', payload);
+           endLoading();
+
            if (res && res.success) {
                localStorage.setItem('guru_v53_ultra', JSON.stringify(res.user));
                checkLogin();
@@ -248,7 +258,7 @@
 
        function handleLogout() { localStorage.removeItem('guru_v53_ultra'); checkLogin(); }
 
-       // --- NAVIGATION ---
+       // SPA OPTIMIZATION: Do not fetch all data on tab switch
        async function switchTab(tab, sub = '') {
            document.querySelectorAll('.menu-btn').forEach(b => b.classList.remove('sidebar-active'));
            document.querySelectorAll('.sub-btn').forEach(b => b.classList.remove('submenu-active'));
@@ -261,18 +271,15 @@
            }
            document.getElementById('tab-title').innerText = sub ? `${tab.toUpperCase()} : ${sub.toUpperCase()}` : tab.toUpperCase();
           
-           const data = await callGAS('getAllData');
-           if (data) {
-               db = data;
-               
-               if (tab === 'pengaturan' && currentUser.role === 'Admin') {
-                   const usersData = await callGAS('getUsers');
-                   db.Users = usersData || [];
-               }
-
-               applyBranding();
-               renderTab(tab, sub);
+           // Only fetch users data if Admin goes to Settings
+           if (tab === 'pengaturan' && currentUser.role === 'Admin') {
+               startLoading();
+               const usersData = await callGAS('getUsers');
+               db.Users = usersData || [];
+               endLoading();
            }
+           
+           renderTab(tab, sub);
        }
 
        // --- RENDERERS ---
@@ -287,7 +294,6 @@
                const dayNames = ["Minggu", "Senin", "Selasa", "Rabu", "Kamis", "Jumat", "Sabtu"];
                const currentDayName = dayNames[now.getDay()];
                
-               // Filter Dashboard Jadwal berdasar role
                let jadwalToday = db.Jadwal.filter(j => j.hari === currentDayName);
                if (currentUser.role === 'Guru Kelas') jadwalToday = jadwalToday.filter(j => j.kelas === currentUser.akses_kelas);
                if (currentUser.role === 'Guru Bidang Studi') jadwalToday = jadwalToday.filter(j => j.mapel.toLowerCase() === currentUser.akses_mapel.toLowerCase());
@@ -413,7 +419,6 @@
 
        // --- MODULE LOGICS ---
        function updateMapelOptions() {
-           const cls = document.getElementById('nil-kelas').value;
            const selectMapel = document.getElementById('nil-mapel');
            if(!selectMapel) return;
            selectMapel.innerHTML = getMapelOptions("-- Pilih Mata Pelajaran --");
@@ -432,10 +437,16 @@
            const date = document.getElementById('abs-tanggal').value;
            const students = db.Siswa.filter(s => s.kelas === cls);
            const bulanAngka = Number(date.substring(5, 7)).toString();
-           const data = students.map(s => ({ tanggal: date, bulan: bulanAngka, siswa_id: s.id, nama_siswa: s.nama, kelas: cls, status: document.querySelector(`input[name="st-${s.id}"]:checked`).value }));
+           
+           // Beri ID sementara untuk tampilan rekap sebelum page reload
+           const data = students.map(s => ({ id: "ABS-TEMP-" + Math.floor(Math.random()*10000), tanggal: date, bulan: bulanAngka, siswa_id: s.id, nama_siswa: s.nama, kelas: cls, status: document.querySelector(`input[name="st-${s.id}"]:checked`).value }));
           
+           startLoading();
            const res = await callGAS('saveBulkAbsen', data);
+           endLoading();
+           
            if (res && res.success) {
+               db.Absen.push(...data); // Push lokal biar rekap langsung jalan tanpa loading sheet
                Swal.fire('Berhasil', 'Absensi tersimpan', 'success');
                switchTab('absen', 'rekap');
            }
@@ -482,10 +493,16 @@
            const mapel = document.getElementById('nil-mapel').value;
            const jenis = document.getElementById('nil-jenis').value;
            const students = db.Siswa.filter(s => s.kelas === cls);
-           const data = students.map(s => ({ siswa_id: s.id, nama_siswa: s.nama, kelas: cls, mapel: mapel, jenis_nilai: jenis, skor: document.getElementById(`inp-nil-${s.id}`).value }));
+           
+           const tgl = new Date().toISOString().split('T')[0];
+           const data = students.map(s => ({ id: "NIL-TEMP-" + Math.floor(Math.random()*10000), tanggal: tgl, siswa_id: s.id, nama_siswa: s.nama, kelas: cls, mapel: mapel, jenis_nilai: jenis, skor: document.getElementById(`inp-nil-${s.id}`).value }));
           
+           startLoading();
            const res = await callGAS('saveBulkNilai', data);
+           endLoading();
+           
            if (res && res.success) {
+               db.Nilai.push(...data);
                Swal.fire('Berhasil', 'Data Nilai tersimpan', 'success');
                switchTab('nilai', 'rekap');
            }
@@ -623,7 +640,10 @@
                }
            }).then(async (r) => {
                if (r.isConfirmed && r.value.username) {
+                   startLoading();
                    const res = await callGAS('saveUser', r.value);
+                   endLoading();
+                   
                    if (res && res.success) {
                        Swal.fire('Berhasil', 'Pengguna berhasil ditambahkan', 'success');
                        switchTab('pengaturan');
@@ -634,7 +654,7 @@
 
        // --- OTHER HANDLERS ---
        function submitJurnal() {
-           const obj = { tanggal: document.getElementById('jur-tgl').value, kelas: document.getElementById('jur-kls').value, materi: document.getElementById('jur-mtr').value, tujuan: document.getElementById('jur-tjn').value, kegiatan: document.getElementById('jur-keg').value, catatan: document.getElementById('jur-ctt').value };
+           const obj = { id: "JUR-TEMP-" + Math.floor(Math.random()*10000), tanggal: document.getElementById('jur-tgl').value, kelas: document.getElementById('jur-kls').value, materi: document.getElementById('jur-mtr').value, tujuan: document.getElementById('jur-tjn').value, kegiatan: document.getElementById('jur-keg').value, catatan: document.getElementById('jur-ctt').value };
            if(!obj.materi) { Swal.fire('Error', 'Judul materi wajib!', 'warning'); return; }
            handleSave('Jurnal', obj);
        }
@@ -654,7 +674,7 @@
        function submitBimbingan() {
            const sData = document.getElementById('bim-siswa').value.split('|');
            const rawJns = document.getElementById('bim-jenis').value;
-           const obj = { tanggal: new Date().toISOString().split('T')[0], siswa_id: sData[0], nama_siswa: sData[1], jenis: (rawJns === 'custom' ? document.getElementById('bim-custom-val').value : rawJns), hasil: document.getElementById('bim-hasil').value, tindak_lanjut: document.getElementById('bim-tindak').value };
+           const obj = { id: "BIM-TEMP-" + Math.floor(Math.random()*10000), tanggal: new Date().toISOString().split('T')[0], siswa_id: sData[0], nama_siswa: sData[1], jenis: (rawJns === 'custom' ? document.getElementById('bim-custom-val').value : rawJns), hasil: document.getElementById('bim-hasil').value, tindak_lanjut: document.getElementById('bim-tindak').value };
            if(!obj.hasil) { Swal.fire('Error', 'Hasil bimbingan wajib diisi!', 'warning'); return; }
            handleSave('Bimbingan', obj);
        }
@@ -676,14 +696,16 @@
 
        async function updateAppSettings() {
            const settingsObj = { nama_sekolah: document.getElementById('set-sekolah').value, alamat: document.getElementById('set-alamat').value, logo_url: document.getElementById('set-logo').value, nama_guru: document.getElementById('set-guru').value, nip_guru: document.getElementById('set-nip-guru').value, nama_kepsek: document.getElementById('set-kepsek').value, nip_kepsek: document.getElementById('set-nip-kepsek').value };
+           startLoading();
            const res = await callGAS('saveSettings', settingsObj);
+           endLoading();
            if (res && res.success) {
                Swal.fire('Berhasil', 'Sistem diperbarui!', 'success');
                switchTab('dashboard');
            }
        }
 
-       function addKelasForm() { Swal.fire({ title: 'Tambah Kelas Baru', input: 'text', confirmButtonText: 'Simpan', customClass: { confirmButton: 'bg-blue-600 p-4 rounded-xl font-bold text-sm px-8' } }).then(r => { if(r.isConfirmed) handleSave('Kelas', {nama_kelas: r.value.toUpperCase()}); }); }
+       function addKelasForm() { Swal.fire({ title: 'Tambah Kelas Baru', input: 'text', confirmButtonText: 'Simpan', customClass: { confirmButton: 'bg-blue-600 p-4 rounded-xl font-bold text-sm px-8' } }).then(r => { if(r.isConfirmed) handleSave('Kelas', {id: "KLS-TEMP-"+Math.floor(Math.random()*1000), nama_kelas: r.value.toUpperCase()}); }); }
       
        function addSiswaForm() {
            Swal.fire({
@@ -702,7 +724,7 @@
                preConfirm: () => {
                    const nis = document.getElementById('sw-nis').value; const nama = document.getElementById('sw-nama').value;
                    if(!nis || !nama) return Swal.showValidationMessage("NIS dan Nama Wajib diisi!");
-                   return { nis: nis, nama: nama, jk: document.getElementById('sw-jk').value, kelas: document.getElementById('sw-kelas').value, is_bimbingan: document.getElementById('sw-wali').checked ? "Ya" : "Tidak" };
+                   return { id: "ID-AUTO-" + nis, nis: nis, nama: nama, jk: document.getElementById('sw-jk').value, kelas: document.getElementById('sw-kelas').value, is_bimbingan: document.getElementById('sw-wali').checked ? "Ya" : "Tidak" };
                }
            }).then(r => { if(r.isConfirmed) handleSave('Siswa', r.value); });
        }
@@ -768,7 +790,7 @@
                        return false;
                    }
 
-                   return { hari, jam, kelas, mapel };
+                   return { id: "JAD-TEMP-"+Math.floor(Math.random()*1000), hari, jam, kelas, mapel };
                }
            }).then(r => { 
                if(r.isConfirmed) handleSave('Jadwal', r.value); 
@@ -776,7 +798,10 @@
        }
 
        async function handleSave(sheet, obj) {
+           startLoading();
            const res = await callGAS('saveData', { sheet: sheet, obj: obj });
+           endLoading();
+           
            if (res && res.success) {
                db[sheet].unshift(obj);
                switchTab(sheet.toLowerCase());
@@ -794,7 +819,7 @@
            const nipKepsek = getSettingValue('nip_kepsek');
 
            const win = window.open("", "_blank");
-           win.document.write(`<html><head><title>${title}</title><style>body{font-family:sans-serif;padding:40px;color:#333;line-height:1.4}.header{display:flex;align-items:center;border-bottom:3px solid #000;padding-bottom:15px;margin-bottom:20px}.logo{width:80px;height:80px;margin-right:20px;object-fit:contain}.title-area{flex:1}.school-name{font-size:22px;font-weight:900;margin:0;text-transform:uppercase}.school-addr{font-size:12px;margin:0;font-weight:600}h1{text-align:center;font-size:16px;text-transform:uppercase;margin:25px 0}table{width:100%;border-collapse:collapse;margin-top:10px}th,td{border:1px solid #000;padding:10px;font-size:10px;text-align:left}th{background:#f0f0f0;text-transform:uppercase}.footer{margin-top:60px;display:flex;justify-content:space-between;font-size:12px}.sign-box{text-align:center;width:220px}.sign-space{height:80px}</style></head><body><div class="header">${logo ? `<img src="${logo}" class="logo">` : ''}<div class="title-area"><h2 class="school-name">${school}</h2><p class="school-addr">${address}</p></div></div><h1>${title}</h1>${tableHtml}<div class="footer"><div class="sign-box">Mengetahui,<br>Kepala Sekolah<br><div class="sign-space"></div><strong>${kepsek}</strong><br>NIP:${nipKepsek}</div><div class="sign-box">Dicetak pada ${new Date().toLocaleDateString('id-ID')},<br>Dicetak Oleh<br><div class="sign-space"></div><strong>${currentUser ? currentUser.nama : guru}</strong><br>Status: ${currentUser ? currentUser.role : 'Pegawai'}</div></div><script>window.print();<\/script></body></html>`);
+           win.document.write(`<html><head><title>${title}</title><style>body{font-family:sans-serif;padding:40px;color:#333;line-height:1.4}.header{display:flex;align-items:center;border-bottom:3px solid #000;padding-bottom:15px;margin-bottom:20px}.logo{width:80px;height:80px;margin-right:20px;object-fit:contain}.title-area{flex:1}.school-name{font-size:22px;font-weight:900;margin:0;text-transform:uppercase}.school-addr{font-size:12px;margin:0;font-weight:600}h1{text-align:center;font-size:16px;text-transform:uppercase;margin:25px 0}table{width:100%;border-collapse:collapse;margin-top:10px}th,td{border:1px solid #000;padding:10px;font-size:10px;text-align:left}th{background:#f0f0f0;text-transform:uppercase}.footer{margin-top:60px;display:flex;justify-content:space-between;font-size:12px}.sign-box{text-align:center;width:220px}.sign-space{height:80px}</style></head><body><div class="header">${logo ? `<img src="${logo}" class="logo">` : ''}<div class="title-area"><h2 class="school-name">${school}</h2><p class="school-addr">${address}</p></div></div><h1>${title}</h1>${tableHtml}<div class="footer"><div class="sign-box">Mengetahui,<br>Kepala Instansi<br><div class="sign-space"></div><strong>${kepsek}</strong><br>NIP:${nipKepsek}</div><div class="sign-box">Dicetak pada ${new Date().toLocaleDateString('id-ID')},<br>Dicetak Oleh<br><div class="sign-space"></div><strong>${currentUser ? currentUser.nama : guru}</strong><br>Status: ${currentUser ? currentUser.role : 'Pegawai'}</div></div><script>window.print();<\/script></body></html>`);
            win.document.close();
        }
 
